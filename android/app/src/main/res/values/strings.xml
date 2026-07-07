@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">
+        O Control usa este serviço para identificar quando você abre um app
+        ou site de apostas, comparando o app em uso com uma lista conhecida
+        e também lendo textos visíveis na tela (como títulos e botões) em
+        busca de termos relacionados a apostas. Isso permite interromper o
+        acesso mesmo em apps novos ou sites abertos no navegador. Nenhum
+        dado é enviado para fora do seu aparelho ou armazenado.
+    </string>
+</resources> 
