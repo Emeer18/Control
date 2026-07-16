@@ -19,6 +19,14 @@ class ControlAccessibilityService : AccessibilityService() {
     private var lastContentScanTime = 0L
     private val contentScanThrottleMs = 800L
 
+    private val handler = Handler(Looper.getMainLooper())
+    private var pendingDwellCheck: Runnable? = null
+    private var contentDetectionPackage: String? = null
+    private val dwellTimeMs = 8000L
+
+    private var abruptCloseCount = 0
+    private val abruptClosesBeforeCrisisScreen = 5
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         Log.d("ControlService", "Serviço de acessibilidade CONECTADO e rodando.")
@@ -55,10 +63,52 @@ class ControlAccessibilityService : AccessibilityService() {
         lastContentScanTime = now
 
         if (screenContainsGamblingContent(packageName)) {
-            Log.d("ControlService", "Conteúdo de aposta detectado na tela de: $packageName")
-            lastBlockedPackage = packageName
-            interceptAndOpenCrisisScreen(packageName)
+            if (contentDetectionPackage != packageName) {
+                contentDetectionPackage = packageName
+                pendingDwellCheck?.let { handler.removeCallbacks(it) }
+
+                val runnable = Runnable { checkAfterDwellTime(packageName) }
+                pendingDwellCheck = runnable
+                handler.postDelayed(runnable, dwellTimeMs)
+
+                Log.d(
+                    "ControlService",
+                    "Conteúdo suspeito detectado, verificação agendada para daqui a ${dwellTimeMs}ms em: $packageName"
+                )
+            }
+        } else {
+            if (contentDetectionPackage == packageName) {
+                pendingDwellCheck?.let { handler.removeCallbacks(it) }
+                pendingDwellCheck = null
+                contentDetectionPackage = null
+            }
         }
+    }
+
+    private fun checkAfterDwellTime(packageName: String) {
+        if (contentDetectionPackage != packageName) return
+
+        val stillSuspicious = screenContainsGamblingContent(packageName)
+        contentDetectionPackage = null
+        pendingDwellCheck = null
+
+        if (!stillSuspicious) {
+            Log.d("ControlService", "Usuário já saiu por conta própria — nenhuma ação necessária.")
+            return
+        }
+
+        abruptCloseCount++
+        val shouldOpenCrisisScreen = abruptCloseCount >= abruptClosesBeforeCrisisScreen
+        Log.d(
+            "ControlService",
+            "Tempo de tolerância esgotado — saída brusca #$abruptCloseCount" +
+                if (shouldOpenCrisisScreen) " (abrindo tela de Crise)" else ""
+        )
+
+        lastBlockedPackage = packageName
+        if (shouldOpenCrisisScreen) abruptCloseCount = 0
+
+        performAbruptExit(packageName, openCrisis = shouldOpenCrisisScreen)
     }
 
     private fun screenContainsGamblingContent(packageName: String): Boolean {
@@ -129,20 +179,31 @@ class ControlAccessibilityService : AccessibilityService() {
         return null
     }
 
-    private fun interceptAndOpenCrisisScreen(packageName: String) {
+    private fun performAbruptExit(packageName: String, openCrisis: Boolean) {
         val isBrowser = BrowserPackages.isBrowser(packageName)
-        val handler = Handler(Looper.getMainLooper())
 
         if (isBrowser) {
             val tabClosed = tryCloseCurrentTab()
             Log.d("ControlService", "[navegador] Tentativa de fechar aba: $tabClosed")
 
-            handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 3000)
-            handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_HOME) }, 3500)
+            handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 500)
+            handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_HOME) }, 1000)
+            if (openCrisis) {
+                handler.postDelayed({ openCrisisActivity() }, 1400)
+            }
         } else {
             performGlobalAction(GLOBAL_ACTION_HOME)
+            if (openCrisis) {
+                handler.postDelayed({ openCrisisActivity() }, 300)
+            }
         }
+    }
 
+    private fun interceptAndOpenCrisisScreen(packageName: String) {
+        performAbruptExit(packageName, openCrisis = true)
+    }
+
+    private fun openCrisisActivity() {
         val intent = Intent(this, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             putExtra(EXTRA_OPEN_CRISIS, true)
